@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks-per-node 16
+#SBATCH --gres=gpu:1
+#SBATCH -p dgx_usr_prod
+#SBATCH -q dgx_qos_sprod
+#SBATCH -t 02:00:00
+
+PORT=$1
+NOTEBOOK_DIR=$2
+cd $NOTEBOOK_DIR
+
+jupyter notebook --ip=127.0.0.1 --no-browser --port=$PORT

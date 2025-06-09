@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks-per-node 1
+#SBATCH -c 8
+#SBATCH -p boost_usr_prod
+#SBATCH --gres=gpu:1
+#SBATCH -t 00:30:00
+
+PORT=$1
+NOTEBOOK_DIR=$2
+cd $NOTEBOOK_DIR
+ml --auto profile/deeplrn cineca-ai
+
+jupyter notebook --ip=127.0.0.1 --no-browser --port=$PORT

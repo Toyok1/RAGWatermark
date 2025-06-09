@@ -1,0 +1,15 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks-per-node 1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=32
+#SBATCH --partition=m100_usr_prod
+#SBATCH -t 08:00:00
+
+PORT=$1
+NOTEBOOK_DIR=$2
+cd $NOTEBOOK_DIR
+ml --auto profile/deeplrn cineca-ai/2.1.0
+
+jupyter lab --ip=127.0.0.1 --no-browser --port=$PORT
+

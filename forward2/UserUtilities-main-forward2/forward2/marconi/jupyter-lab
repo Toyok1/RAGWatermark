@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks-per-node 1
+#SBATCH -p skl_usr_dbg
+#SBATCH -t 00:30:00
+
+PORT=$1
+NOTEBOOK_DIR=$2
+
+module load autoload anaconda/2019.10
+
+cd $NOTEBOOK_DIR
+jupyter lab --ip=127.0.0.1 --no-browser --port=$PORT
+

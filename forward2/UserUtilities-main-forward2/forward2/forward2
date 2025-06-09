@@ -1,0 +1,409 @@
+#!/bin/bash
+
+VERBOSE=0
+
+do_start()
+{
+    check_previous_submit
+    
+    echo
+    echo "== Getting destination directory:"
+    if [ -z ${RESOURCE_HOME} ]
+    then
+       RESOURCE_HOME=`ssh ${LOGIN} pwd`
+    fi
+
+    ssh ${LOGIN} mkdir -p $RESOURCE_HOME/forward-util
+
+    echo
+    echo "== Uploading sbatch script to $RESOURCE_HOME/forward-util"
+    scp $FORWARD_SCRIPT ${LOGIN}:$RESOURCE_HOME/forward-util/
+
+    echo
+    echo "== Submitting sbatch ==" 
+    command="sbatch
+        --job-name=$SBATCH
+        --output=$RESOURCE_HOME/forward-util/$SBATCH.out
+        --error=$RESOURCE_HOME/forward-util/$SBATCH.err
+        $RESOURCE_HOME/forward-util/$SBATCH $PORT $DIRECTORY"
+
+        echo ${command}
+        ssh ${LOGIN} ${command}
+
+        if [ "$?" -ne 0 ]; then
+            echo "Error Submitting sbatch" 
+            exit
+        fi
+
+        # Wait for the node allocation, get identifier
+        get_machine
+        echo "Notebook running on $MACHINE"
+
+        setup_port_forwarding
+
+        get_token
+
+        instruction_get_logs
+
+        echo
+        echo "== Instructions =="
+        echo "1. Open a browser at: http://localhost:$PORT/$TOKEN"
+        echo "2. Something went wrong? Look at logs (see instruction above)"
+        echo "3. Use Control-C to end, cancel job and kill tunnels (twice to skip confirmation)."
+        echo
+
+        if [[ $(uname) == "Linux" ]]
+            then
+                if which xdg-open > /dev/null
+                then
+                xdg-open "http://localhost:$PORT/$TOKEN"
+                fi
+            elif [[ $(uname) == "Darwin" ]]
+                then
+                if which open > /dev/null
+                    then
+                    open "http://localhost:$PORT/$TOKEN"
+                fi
+        fi
+}
+
+do_stop() {
+   echo
+if [ -n "$SBATCH" ] && [ -n "$RESOURCE"  ] && [ -n "$LOGIN" ]
+    then
+    echo "Killing $SBATCH slurm job on ${RESOURCE}"
+    ## change scancel path for Leonardo!!
+    if [[ ${RESOURCE} == "leonardo" ]]
+    then
+	## printf "\033[5;31mWe are on Leonardo!!! \033[0m\n" 
+	ssh ${LOGIN} "squeue --name=$SBATCH --user=$USERNAME -o '%A' -h | xargs --no-run-if-empty /usr/bin/scancel"
+	SSH2PID=$(ssh ${LOGIN} ps -ef | grep "ssh -4 -L ${PORT}:localhost:${PORT} -N ${MACHINE}" | awk '{print $2}')
+	if [ ! -z "${SSH2PID}" ] 
+	then
+	    echo "Killing ssh -4 -L${PORT}:loclahost:${PORT} -N ${MACHINE}"
+	    ssh ${LOGIN} kill -9 ${SSH2PID}
+	fi
+    else
+        ssh ${LOGIN} "squeue --name=$SBATCH --user=$USERNAME -o '%A' -h | xargs --no-run-if-empty /opt/slurm/current/bin/scancel"
+    fi
+fi
+
+if [ -n "$RESOURCE" ] && [ -n "$PORT"  ]  && [ -n "$SSHPID" ]
+    then
+    echo "Killing listeners on ${RESOURCE}"
+    lsof -a -i :$PORT -c ssh -t | xargs kill &>/dev/null
+fi
+   exit
+}
+
+look_for_file() {
+    FOUND="no"
+    FILE=$1
+    echo "== Finding Script ==" $FILE 
+
+    if [ -z ${RESOURCE} ]
+       then
+       LOOKFORS=("$FILE")
+       else
+       LOOKFORS=("$RESOURCE/$FILE" "$FILE");
+    fi
+
+    for LOOKFOR in "${LOOKFORS[@]}"
+    do
+        echo "Looking for ${LOOKFOR}";
+        if [ -f "${LOOKFOR}" ]
+            then
+            FOUND="${FILE}"
+            echo "Found $LOOKFOR:";
+            if [ $VERBOSE -eq 1 ]
+                then
+                cat ${LOOKFOR}
+            fi
+            break
+        fi
+    done
+    echo
+
+    if [ "${FOUND}" == "no" ]
+    then
+        echo "File not found!!";
+#        echo "Make sure your $FILE file exists.";
+#        display_usage
+    fi
+
+}
+
+check_previous_submit() {
+
+    echo "== Checking for previous notebook =="
+    PREVIOUS=`ssh ${LOGIN} squeue --name=$SBATCH --user=$USERNAME -o "%R" -h`
+    if [ -z "$PREVIOUS" ];
+        then
+            echo "No existing ${SBATCH} jobs found, continuing..."
+        else
+        echo "Found existing job for ${SBATCH}, ${PREVIOUS}."
+        echo "Please cancel job before:"
+        echo "ssh ${LOGIN} scancel --name=$SBATCH --user=$USERNAME"
+        exit 
+    fi
+}
+
+get_machine() {
+
+    TIMEOUT=${TIMEOUT-1}
+    ATTEMPT=1
+    MACHINE=""
+    echo
+    echo "== Waiting for job to start, using exponential backoff =="
+
+    while [[ ${MACHINE} == "" ]]
+      do
+          MACHINE=`ssh ${LOGIN} squeue --name=$SBATCH --user=$USERNAME -o "%N" -h`
+#          nodelist
+#          MACHINE=`ssh ${RESOURCE} squeue --name=$SBATCH --user=$USERNAME -o "%T%B" -h`
+
+          if [[ "$MACHINE" != "" ]]
+          then
+              echo "Attempt ${ATTEMPT}: resources allocated to ${MACHINE}!.."  1>&2
+              break
+          fi
+        TIMEOUT=$(( TIMEOUT * 2 ))
+        echo "Attempt ${ATTEMPT}: not ready yet... retrying in $TIMEOUT .."  1>&2
+        sleep $TIMEOUT
+        ATTEMPT=$(( ATTEMPT + 1 ))
+    done
+#    MACHINE="`ssh ${LOGIN} squeue --name=$SBATCH --user=$USERNAME -o "%T%B" -h |sed 's/RUNNING//g'`"
+}
+
+setup_port_forwarding() {
+    
+    if [ ${RESOURCE} == "marconi" ]
+        then
+        MACHINE=${MACHINE}-hfi
+    fi
+    echo
+    echo "== Setting up port forwarding =="
+
+    echo "ssh -f -4 -L $PORT:localhost:$PORT ${LOGIN} ssh -4 -L $PORT:localhost:$PORT -N $MACHINE "
+    ssh  -4 -L $PORT:localhost:$PORT ${LOGIN} ssh -4 -L $PORT:localhost:$PORT -N "$MACHINE"  & SSHPID=$!
+#    echo $SSHPID
+}
+
+instruction_get_logs() {
+    echo
+    echo "== View logs in separate terminal =="
+    echo "ssh ${LOGIN} cat $RESOURCE_HOME/forward-util/${SBATCH}.out"
+    echo "ssh ${LOGIN} cat $RESOURCE_HOME/forward-util/${SBATCH}.err"
+}
+
+get_token() {
+
+    TIMEOUT=1
+    ATTEMPT=1
+    echo
+    echo "== Waiting for token, using exponential backoff =="
+
+    while [ -z $TOKEN ]
+      do
+        TOKEN=$(ssh ${LOGIN} cat $RESOURCE_HOME/forward-util/${SBATCH}.err | grep -ho "?token=[a-z0-9]*" |sed -n 1p)
+        if [ "$TOKEN" != "" ]
+            then
+            if [ "${TOKEN#"?token="}" != "" ]
+                then
+                echo "Attempt ${ATTEMPT}: $TOKEN "  1>&2
+            else
+                TOKEN=""
+            fi
+            break
+        fi
+        TIMEOUT=$(( TIMEOUT * 2 ))
+        echo "Attempt ${ATTEMPT}: not ready yet... retrying in $TIMEOUT .."  1>&2
+        ATTEMPT=$(( ATTEMPT + 1 ))
+        sleep $TIMEOUT
+    done
+
+}
+
+
+display_usage() {
+echo "usage: forward2 [-u user] [-r resource] sbatchfile [path]"
+echo "sbatchfile      sbatch script to submit"
+echo "path            running path (default home path)"
+echo "-u, --user      username"
+echo "-r, --resource  cluster name (marconi,leonardo,dgx,g100)"
+echo "-p, --port      port number"
+echo "-h, --help      print this help"
+exit
+}
+
+ctrlc() {
+    let CNTRLCNT++
+    echo
+    if [[ $CNTRLCNT == 2 ]]; then
+        do_stop
+    fi
+}
+
+
+setup() {
+
+if [ -z "$RESOURCE" ]
+    then
+    echo "First, choose the resource identifier that specifies your cluster resoure. 
+We will set up this name in params.sh file, and use it to reference the resource for the next time."
+    echo
+    read -p "Resource identifier (default: g100) > "  RESOURCE
+    RESOURCE=${RESOURCE:-g100}
+fi
+    echo "RESOURCE=$RESOURCE" >${RESOURCE}/params.sh
+
+if [ -z "$USERNAME" ]
+    then
+    read -p "${RESOURCE} username (deafault: $USER) > "  USERNAME
+    USERNAME=${USERNAME:-$USER}
+    echo "USERNAME=$USERNAME" >>${RESOURCE}/params.sh
+fi
+
+port=$((32000 + RANDOM))
+echo
+echo "Next, pick a port to use.  If someone else is port forwarding using that
+      port already, this script will not work.  If you pick a random number in the
+      range 32000-64767, you should be good."
+echo
+read -p "Port to use (default:-$port)> "  PORT
+PORT=${PORT:-$port}
+echo "PORT=$PORT" >>${RESOURCE}/params.sh
+
+if [ -z "$RESOURCE_HOME" ]
+    then
+    read -p "RESOURCE_HOME (deafault: remote home) > "  RESOURCE_HOME
+    RESOURCE_HOME=${RESOURCE_HOME:-}
+    echo "RESOURCE_HOME=$RESOURCE_HOME" >>${RESOURCE}/params.sh
+fi
+
+
+}
+
+if [ $# -lt 1 ] 
+    then
+    display_usage
+fi
+
+while [ -n "$1" ]; do
+   case $1 in
+      -u | --user)
+      shift
+      USERNAME="$1"
+      shift
+      ;;
+      -r | --resource)
+      shift
+      RESOURCE="$1"
+      shift
+      ;;
+      -p | --port)
+      shift
+      PORT=$1
+      shift
+      ;;
+      -h | --help)
+      display_usage
+      ;;
+      *)
+      SBATCH+=("$1")
+      shift
+      ;;
+   esac
+done
+
+if [ ${#SBATCH[@]} -gt 2 ] 
+   then
+   echo "Unknown options " ${SBATCH[*]}
+   echo
+   display_usage
+fi
+
+if [ -z ${SBATCH[0]} ]
+    then
+    echo "Missing sbatchfile"
+    display_usage
+fi
+
+if [ -z "$USERNAME" ] || [ -z "$RESOURCE"  ]  || [ -z "$PORT" ] 
+    then
+    look_for_file params.sh
+    if [ $FOUND == "no" ]
+        then
+        echo "== Setting up params.sh =="
+        setup
+        else
+        echo "== Loading params.sh =="
+        . $LOOKFOR
+        echo
+    fi
+
+fi
+
+for var in USERNAME RESOURCE  PORT
+do
+    if [ -z $(eval echo "$"$var"") ] 
+        then
+        echo $var not defined neither in params.sh nor in command line options
+        display_usage
+    fi
+done
+
+if [[ ${RESOURCE} == "leonardo" ]] 
+then
+    # host key does not work for alias login.leonardo.cineca.it, we chose login01-ext! 
+    LOGIN=${USERNAME}@login01-ext.${RESOURCE}.cineca.it
+else
+    LOGIN=${USERNAME}@login.${RESOURCE}.cineca.it
+fi
+
+if [ $VERBOSE -eq 1 ]
+    then
+    echo $LOGIN
+    echo
+fi
+
+DIRECTORY=${SBATCH[1]}
+if [ -z "$DIRECTORY" ]
+    then
+    DIRECTORY=""
+fi
+
+# Found FORWARD_SCRIPT 
+look_for_file $SBATCH
+if [ $FOUND == "no" ]
+    then
+    display_usage
+    else
+    FORWARD_SCRIPT=$LOOKFOR
+fi
+
+trap ctrlc SIGINT
+CNTRLCNT=0
+
+do_start
+while true
+do
+wait $SSHPID
+if [[ $CNTRLCNT == 1 ]]; then
+    echo -n "End this process, cancel job and kill tunnels (y/[n])?"
+    read -t 5 YN 
+    if  [ $? -ne 0 ]
+         then 
+        YN=N 
+        echo -n " No answer for 5s: "
+    fi
+    case "$YN" in
+        y|Y )
+        do_stop;;
+        * ) 
+        echo "resuming operation..."
+        CNTRLCNT=0
+   esac
+fi
+done
+

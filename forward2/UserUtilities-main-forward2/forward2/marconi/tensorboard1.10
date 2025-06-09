@@ -1,0 +1,14 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH --ntasks-per-node 1
+#SBATCH -p skl_usr_dbg
+#SBATCH -t 00:30:00
+
+PORT=$1
+TENSORBOARD_DIR=$2 
+
+module load profile/deeplrn autoload tensorflow/1.10.0--python--3.6.4
+
+echo "?token=" >&2
+
+tensorboard --logdir $TENSORBOARD_DIR --port=$PORT 
