@@ -6,9 +6,24 @@ import accelerate
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 random.seed(42)
 
-#quantization_config = BitsAndBytesConfig(load_in_4bit=True)
-tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") #change this to your model path
-model = AutoModelForCausalLM.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") #change this to your model path
+model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B" #change this to your model path
+
+'''quantization_config = BitsAndBytesConfig(load_in_4bit=True)
+tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") #change this to your tokenizer path
+model = AutoModelForCausalLM.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B") #change this to your model path'''
+
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(
+    model_name,
+    torch_dtype="auto",
+    device_map="auto"
+)
+
+# prepare the model input
+#prompt = "Give me a short introduction to large language model."
+
+
 
 real_path = "./distribution/part_"
 
@@ -77,19 +92,47 @@ Please generate a coherent and informative article that incorporates these eleme
     return prompt
 
 if __name__ == "__main__":
-    for i in range(100):
+    for i in range(3):
         prompt = main()
         print(f"Step_{i} --- \nGenerated Prompt:")
         print(f'{prompt}\n')
-        with open('./json_files/new_tokenizer_tests/prompts/generated_prompt_'+f'{i}'+'.txt', "w") as f:
+        with open('./json_files/new_tokenizer_tests/prompts/generated_prompt_'+f'{i+3}'+'.txt', "w") as f:
             f.write(prompt)
 
         # Here you call the model to generate the article based on the prompt.
-        model_inputs = tokenizer([prompt], return_tensors="pt").to("auto")
-        generated_ids = model.generate(**model_inputs)
-        tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        generated_text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+        messages = [
+        {"role": "user", "content": prompt}
+        ]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            enable_thinking=False # Switches between thinking and non-thinking modes. Default is True.
+        )
+        model_inputs = tokenizer([text], return_tensors="pt").to('cuda') # Use 'cuda' if you have a GPU available
 
-        with open('./json_files/new_tokenizer_tests/prompts/generated_article_'+f'{i}'+'.txt', "w") as f:
-            f.write(generated_text)
+        # conduct text completion
+        generated_ids = model.generate(
+            **model_inputs,
+            max_new_tokens=327680
+        )
+        output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist() 
+        
+        # parsing thinking content
+        try:
+        # rindex finding 151668 (</think>)
+            index = len(output_ids) - output_ids[::-1].index(151668)
+        except ValueError:
+            index = 0
+
+        thinking_content = tokenizer.decode(output_ids[:index], skip_special_tokens=True).strip("\n")
+        content = tokenizer.decode(output_ids[index:], skip_special_tokens=True).strip("\n")
+
+        print("thinking content:", thinking_content)
+        print("content:", content)
+
+        content = content.split("</think>")[-1].strip()  # Remove any leading/trailing whitespace
+
+        with open('./json_files/new_tokenizer_tests/generations/generated_article_'+f'{i+3}'+'.txt', "w") as f:
+            f.write(content)
         print("\n")
