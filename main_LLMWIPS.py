@@ -25,7 +25,7 @@ model = AutoModelForCausalLM.from_pretrained(
 
 
 
-real_path = "./distribution/part_"
+real_path = "./distribution/"
 
 def walk_directory(directory):
     l = []
@@ -56,8 +56,8 @@ def select_random_tokens_for_topic(topic, common_tokens, num_tokens=10):
         return related_tokens
     return random.sample(related_tokens, num_tokens)
 
-def main():
-    random_article = choose_random_article()
+def main(path):
+    random_article = path #choose_random_article()
     topic = get_topic(random_article)
     print(f"Selected article path: {random_article}")
     print(f"Randomly selected article topic: {topic}")
@@ -73,12 +73,14 @@ def main():
         key_facts = article_data.get("key_facts", [])
         other_facts = article_data.get("other_facts", [])
         #choose 5 random other facts
-        if len(other_facts) > 5:
-            other_facts = random.sample(other_facts, 5)
+        if len(other_facts) > 2:
+            other_facts = random.sample(other_facts, 2)
         else:
             print(f"Not enough other facts. Found: {len(other_facts)}")
     print(f"Key facts: {key_facts}")
     print(f"Other facts: {other_facts}")
+
+    all_facts = key_facts + other_facts
 
     kf_prompt = ", ".join(key_facts)
     of_prompt = ", ".join(other_facts)
@@ -89,11 +91,13 @@ Key Facts: <keyfacts>{kf_prompt}</keyfacts>
 Additional Facts: <additionalfacts>{of_prompt}</additionalfacts>
 Tokens to use: <tokens>{st_prompt}</tokens>
 Please generate a coherent and informative article that incorporates these elements."""
-    return prompt
+    return {"prompt": prompt, "facts":all_facts}
 
 if __name__ == "__main__":
-    for i in range(3):
-        prompt = main()
+    for i in walk_directory(real_path):
+        result = main(i)
+        prompt = result["prompt"]
+        all_facts = result["facts"]
         print(f"Step_{i} --- \nGenerated Prompt:")
         print(f'{prompt}\n')
         with open('./json_files/new_tokenizer_tests/prompts/generated_prompt_'+f'{i+3}'+'.txt', "w") as f:
@@ -133,6 +137,14 @@ if __name__ == "__main__":
 
         content = content.split("</think>")[-1].strip()  # Remove any leading/trailing whitespace
 
-        with open('./json_files/new_tokenizer_tests/generations/generated_article_'+f'{i+3}'+'.txt', "w") as f:
-            f.write(content)
-        print("\n")
+        with open(i,'r') as f:
+            data = json.load(f)
+            articles = data.get("articles", [])
+        articles.append({"watermarked": {"facts":all_facts,"article":content, "num_words": len(content.split())}})
+
+        #copy the original file with the added article to a new file
+        new_file_path = i.replace(real_path, "./json_files/new_tokenizer_tests/articles/")
+        os.makedirs(os.path.dirname(new_file_path), exist_ok=True)
+        with open(new_file_path, 'w') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        
