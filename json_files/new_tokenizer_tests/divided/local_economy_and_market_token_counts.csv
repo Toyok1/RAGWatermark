@@ -1,0 +1,11 @@
+token,clean_count,watermarked_count
+twin,1,1
+retrain,0,0
+classification,0,2
+attributes,1,0
+currently,1,0
+persists,0,1
+cohort,0,0
+hinge,0,0
+diagnosis,2,4
+exponential,0,1
